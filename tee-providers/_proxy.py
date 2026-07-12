@@ -9,17 +9,23 @@ real upstream; the transport encrypts content and decrypts the reply. Every
 other path (model listing, etc.) is forwarded untouched.
 
 The model's signing key is per-model — each model runs in its own enclave — so
-attestation keys off the model named in the request, cached per (provider, model).
+attestation keys off the model named in the request, cached per (provider, model)
+and re-attested after ``TEE_ATTESTATION_TTL`` seconds (default 3600).
 """
 import http.server
 import json
+import os
 import threading
+import time
 from urllib.parse import urlsplit
 
 import httpx
 
+# Re-attest a model's signing key after this many seconds (freshness vs. a round-trip).
+_TTL = float(os.environ.get("TEE_ATTESTATION_TTL", "3600"))
+
 _ROUTES: dict[str, dict] = {}                    # prefix -> {root, upstream, kind, variant, algo}
-_E2EE: dict[tuple, httpx.BaseTransport] = {}     # (prefix, model) -> E2EE transport
+_E2EE: dict[tuple, tuple] = {}                   # (prefix, model) -> (transport, attested_at)
 _PLAIN = httpx.HTTPTransport()                   # shared passthrough for non-chat paths
 _LOCK = threading.Lock()
 _server = None
@@ -46,16 +52,16 @@ def register_route(prefix: str, upstream: str, kind: str, variant: str, algo: st
 def _e2ee_transport_for(prefix: str, model: str, api_key: str) -> httpx.BaseTransport:
     key = (prefix, model)
     with _LOCK:
-        t = _E2EE.get(key)
-        if t is not None:
-            return t
+        entry = _E2EE.get(key)
+        if entry is not None and time.monotonic() - entry[1] < _TTL:
+            return entry[0]
         route = _ROUTES[prefix]
         from ._attestation import attest_signing_key
         from ._transport import E2EETransport, VeniceE2EETransport
         spk, algo = attest_signing_key(route["kind"], route["upstream"], model, api_key, route["algo"])
         cls = VeniceE2EETransport if route["variant"] == "venice" else E2EETransport
         t = cls(spk, algo, inner=httpx.HTTPTransport())
-        _E2EE[key] = t
+        _E2EE[key] = (t, time.monotonic())
         return t
 
 
@@ -112,8 +118,6 @@ class _Handler(http.server.BaseHTTPRequestHandler):
 
     do_GET = _forward
     do_POST = _forward
-    do_PUT = _forward
-    do_DELETE = _forward
 
 
 def start() -> int:

@@ -69,6 +69,19 @@ compose-hash allowlist), no GPU NRAS check, no live TLS-cert comparison. Those
 raise assurance from "a genuine TEE holds this key" to "the *expected* image
 holds this key". Add them by extending `_attestation.py` with pinned values.
 
+## Caveats
+
+- **Re-attestation window** — the signing key is cached per `(provider, model)`
+  for `TEE_ATTESTATION_TTL` seconds (default 3600); a key rotated inside that
+  window isn't re-checked.
+- **Loopback listener** — an unauthenticated HTTP server runs on `127.0.0.1`
+  (ephemeral port) for the process lifetime, opened at import. It forwards the
+  caller's `Authorization` header and injects nothing, so it leaks no
+  credentials, but it is a local open relay while hermes runs.
+- **Extra hop** — every request is re-serialized through the in-process server.
+- The proxy exists only because a `ProviderProfile` can't attach a transport; a
+  `wrap_transport()` hook in hermes core would remove it. See the repo README.
+
 ## Adding a provider
 
 The proxy + E2EE transport are provider-agnostic. To add one:

@@ -78,6 +78,26 @@ allowlist), no GPU NRAS check, no live TLS-cert comparison. Those raise assuranc
 from "a genuine TEE holds this key" to "the *expected* image holds this key". Add
 them by extending `tee-providers/_attestation.py` with pinned values.
 
+## Caveats / limitations
+
+- **Re-attestation window.** A model's signing key is attested and cached per
+  `(provider, model)` for `TEE_ATTESTATION_TTL` seconds (default `3600`). Within
+  that window a rotated or replaced enclave key is not re-checked. Lower the TTL
+  for stronger freshness at the cost of an extra attestation round-trip.
+- **Loopback listener.** The plugin opens an *unauthenticated* HTTP server on
+  `127.0.0.1:<ephemeral>` for the process lifetime. It forwards the **caller's**
+  `Authorization` header and injects no credentials, so a local process gains
+  nothing it couldn't get by calling the upstream directly — but it is an open
+  relay on loopback while hermes runs. The socket is opened at import, i.e. on any
+  `hermes model` listing, not only chat.
+- **Extra hop.** Each request is re-serialized through an in-process HTTP/1.1
+  server and re-chunked. Localhost, so the added latency is small.
+- **The simplest form needs one upstream hook.** All of the above exists only
+  because a hermes `ProviderProfile` cannot attach an httpx transport or decrypt
+  responses. A `ProviderProfile.wrap_transport()` hook would delete the proxy
+  entirely and allow per-request attestation — this plugin is the zero-core-change
+  workaround.
+
 ## Layout
 
 ```
