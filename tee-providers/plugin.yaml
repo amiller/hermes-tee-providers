@@ -1,0 +1,5 @@
+name: tee-providers
+kind: model-provider
+version: 0.1.0
+description: TEE-attested inference providers with end-to-end encryption (NEAR AI)
+author: Andrew Miller

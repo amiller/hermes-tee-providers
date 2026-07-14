@@ -1,0 +1,6 @@
+dcap-qvl
+eth-keys
+pynacl
+cryptography
+httpx
+requests
