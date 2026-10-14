@@ -9,6 +9,7 @@ from typing import Iterable, Iterator, Optional
 
 import httpx
 
+from ._tool_boundary import require_text_request, require_text_response, UnsupportedEncryptedChat
 from ._crypto import _generate_keypair, _encrypt_content, _decrypt_content
 
 logger = logging.getLogger(__name__)
@@ -85,11 +86,13 @@ class E2EETransport(httpx.BaseTransport):
 
     def _handle_chat(self, request: httpx.Request) -> httpx.Response:
         payload = json.loads(request.content or b"{}")
+        require_text_request(payload)
         priv_key, client_pub_hex = _generate_keypair(self._algo)
 
         for msg in payload.get("messages", []):
-            if isinstance(msg.get("content"), str) and msg["content"]:
-                msg["content"] = _encrypt_content(msg["content"], self._pub, self._algo)
+            for field in _DECRYPT_FIELDS:
+                if isinstance(msg.get(field), str) and msg[field]:
+                    msg[field] = _encrypt_content(msg[field], self._pub, self._algo)
 
         new_body = json.dumps(payload).encode()
         headers = httpx.Headers(request.headers)
@@ -137,6 +140,7 @@ class E2EETransport(httpx.BaseTransport):
                 extensions=upstream.extensions,
                 request=request,
             )
+        require_text_response(data)
         for choice in data.get("choices", []):
             msg = choice.get("message", {})
             for field in _DECRYPT_FIELDS:
@@ -155,27 +159,33 @@ class E2EETransport(httpx.BaseTransport):
         )
 
     def _decrypt_sse(self, chunks: Iterable[bytes], priv_key) -> Iterator[bytes]:
-        pending = b""
-        for chunk in chunks:
-            pending += chunk
-            while b"\n" in pending:
-                raw, pending = pending.split(b"\n", 1)
-                line = raw.decode("utf-8", errors="replace")
-                if line.startswith("data: {"):
+        def decode_line(raw):
+            line = raw.decode("utf-8").rstrip("\r")
+            if line.startswith("data:"):
+                payload = line[5:].lstrip()
+                if payload and payload != "[DONE]":
                     try:
-                        data = json.loads(line[6:])
-                    except Exception:
-                        yield (line + "\n").encode()
-                        continue
+                        data = json.loads(payload)
+                    except ValueError:
+                        raise UnsupportedEncryptedChat("E2EE adapter refused malformed response JSON") from None
+                    require_text_response(data)
                     for choice in data.get("choices", []):
                         delta = choice.get("delta", {})
                         for field in _DECRYPT_FIELDS:
                             if self._should_decrypt(delta.get(field)):
                                 delta[field] = _decrypt_content(delta[field], priv_key, self._algo)
                     line = "data: " + json.dumps(data)
-                yield (line + "\n").encode()
+            return line.encode()
+
+        pending = b""
+        for chunk in chunks:
+            pending += chunk
+            while b"\n" in pending:
+                raw, pending = pending.split(b"\n", 1)
+                yield decode_line(raw) + b"\n"
         if pending:
-            yield pending
+            # The final event must pass the same guard, even without a newline.
+            yield decode_line(pending)
 
 
 class VeniceE2EETransport(E2EETransport):

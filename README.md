@@ -78,6 +78,32 @@ allowlist), no GPU NRAS check, no live TLS-cert comparison. Those raise assuranc
 from "a genuine TEE holds this key" to "the *expected* image holds this key". Add
 them by extending `tee-providers/_attestation.py` with pinned values.
 
+## Tool boundary
+
+This adapter supports text-only chat. It refuses native tool definitions,
+structured tool history and non-text content before sending the chat upstream.
+It also refuses native tool calls in JSON or streaming replies. Empty tool lists
+and no-tool selectors are removed. Message content and reasoning are encrypted.
+Model IDs and request parameters remain visible; this does not encrypt arbitrary
+request JSON. This applies to every provider variant using this transport; it does not claim
+that every upstream provider has the same encryption protocol.
+
+Use a no-tools chat session with this minimal adapter. It does not implement
+NEAR's opt-in all-fields protocol or Abalone's encrypted-text local tool bridge.
+The [agent E2EE research thread](https://github.com/amiller/awesome-private-inference/issues/23)
+tracks native-tool qualification, verified key binding, response authenticity
+and external-tool disclosure separately. These guards do not qualify enclave
+code, an active deployment, or the security of the local host.
+
+Offline regression checks:
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+The tests use synthetic keys, actual encryption and a mock upstream. They do not
+fetch attestations or make paid/provider requests.
+
 ## Caveats / limitations
 
 - **Re-attestation window.** A model's signing key is attested and cached per

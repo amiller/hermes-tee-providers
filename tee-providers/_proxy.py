@@ -21,6 +21,8 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from ._tool_boundary import UnsupportedEncryptedChat
+
 # Re-attest a model's signing key after this many seconds (freshness vs. a round-trip).
 _TTL = float(os.environ.get("TEE_ATTESTATION_TTL", "3600"))
 
@@ -100,7 +102,16 @@ class _Handler(http.server.BaseHTTPRequestHandler):
 
         req = httpx.Request(self.command, _ROUTES[prefix]["root"] + subpath,
                             headers=headers, content=body)
-        resp = transport.handle_request(req)
+        try:
+            resp = transport.handle_request(req)
+        except UnsupportedEncryptedChat as exc:
+            self.send_error(502, str(exc))  # static boundary refusal
+            return
+        except Exception:
+            # No response bytes have been sent; keep payloads and credentials
+            # out of diagnostics and never retry with a plaintext transport.
+            self.send_error(502, "E2EE request failed")
+            return
         try:
             self.send_response(resp.status_code)
             for k, v in resp.headers.items():
